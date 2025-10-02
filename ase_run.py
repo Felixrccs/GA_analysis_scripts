@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.constants import k,e
+from ase.calculators.singlepoint import SinglePointCalculator
 
 def get_delta_mu_H(U, pH = 0, T=298, p_H2 =1):
     """
@@ -115,6 +116,12 @@ def target_diagram(
             - structure.AtomPositionManager.latticeVectors : (3,3) array for cell vectors
         """
 
+        for at in structures:
+            try:
+               at.info['E'] = at.get_potential_energy()
+            except:
+              at.info['E'] = 0.0
+
         # 1) Unique labels: hard coded for application
         unique_labels = ['H','O','Cu']
 
@@ -124,20 +131,11 @@ def target_diagram(
         X = np.zeros((N, M), dtype=float)
         y = np.zeros(N, dtype=float)
 
-        A_array = np.zeros(N)
         for i, struct in enumerate(structures):
-            y[i] = getattr(struct.AtomPositionManager, 'E', 0.0)
-            labels_array = struct.AtomPositionManager.atomLabelsList
+            y[i] = struct.info['E']
+            labels_array = np.array(struct.get_chemical_symbols())
             for j, lbl in enumerate(unique_labels):
                 X[i, j] = np.count_nonzero(labels_array == lbl)
-
-            
-            # 2D surface area from first two lattice vectors 
-            a_vec = struct.AtomPositionManager.latticeVectors[0, :2] #Todo: Does this require the surface to be orthoronal?
-            b_vec = struct.AtomPositionManager.latticeVectors[1, :2]
-            A_array[i] = abs(np.linalg.det(np.array([a_vec, b_vec])))
-
-        y = np.where(np.isnan(y), 0.0 ,y)
 
 
         # 3) Adjust for mu_O = mu_H2O - 2mu_H
@@ -153,76 +151,36 @@ def target_diagram(
         H_values = np.linspace(H_range[0], H_range[1], steps)
 
 
-        gamma = [] 
+        allfE = [] 
 
         for H in H_values:
             # 6) Formation energies including change in mu_H from standard conditions (pH=0, U=0V vs SHE)
             fE = fE_ref - X[:, 0] * H
-            fE = fE / A_array  # normalize by area
             
-            gamma.append(fE)
-    
-        return H_values, np.array(gamma).T
+            allfE.append(fE)
+
+        allfE = np.array(allfE)
+
+        pareto = np.argmin(allfE,axis=1)
+        _, ids = np.unique(pareto, return_index=True)
+        new_atoms = [structures[ind] for ind in pareto[sorted(ids)]]
+        return new_atoms
 
     return compute
 
 
-import matplotlib.pyplot as plt
-from sage_lib.partition.Partition import Partition
 
+from ase.io import read,write
 
-
-
-#files = f'/home/friccius/data/MACE/MACE_hero_run/ga_dir/generation_7/supercell_4_4_1/config_all.xyz' 
-files = './out.xyz'
-
-partition=Partition()
-partition.read_files(files)
-
+#atoms = read(f'/home/friccius/data/MACE/MACE_hero_run/ga_dir/generation_5/supercell_4_4_1/config_all.xyz',':')
+atoms = read(f'./out.xyz',":")
 # calculate surface free energies
-
 comp = target_diagram(reference_potentials= {"Cu": -3.727123268440009, "H2O": -14.253282664300396,  "H": -6.81835453297334/2})
-U,data = comp(partition)
-fig, ax = plt.subplots()
-for i,val in enumerate(data):
-    ax.plot(U,val*1e3,'darkgray',lw=0.5)
+out = comp(atoms)
+write('./pareto.xyz',out)
 
-
-partition=Partition()
-partition.read_files('./Lit.xyz')
-comp = target_diagram(reference_potentials= {"Cu": -3.727123268440009, "H2O": -14.253282664300396,  "H": -6.81835453297334/2})
-U,data = comp(partition)
-
-for i,val in enumerate(data):
-    ax.plot(U,val*1e3,'r',zorder=3)
-
-
-ax.set_xlabel('mu_H - mu_H_0 [eV]')
-
-ax.set_ylim([0,400])
-ax.set_xlim([-1.0,0.5])
-ax.set_ylabel(r'$\gamma$ (eV/$\rm \AA^2$)')
-
-# Bulk transition
-ax.vlines(get_bulk_classic(-14.253282664300396, -6.81835453297334/2),0.0,400,colors='b')
-ax.fill_between([-2.,get_bulk_classic(-14.253282664300396, -6.81835453297334/2)],[400,400],fc='b',alpha=0.3, zorder=1)
-
-# RHE/SHE pH=0
-secax = ax.secondary_xaxis('top', functions=(get_delta_mu_H, get_delta_U))
-secax.set_xlabel('U_RHE / U_SHE (pH=0) [V]')
-
-# SHE pH = 13 (Literature, compare to slides)
-third = ax.secondary_xaxis(1.2, functions=(lambda x: get_delta_mu_H(x,pH=13), lambda x: get_delta_U(x,pH=13)))
-third.set_xlabel('U_RHE / U_SHE (pH=13) [V] literature')
+from ase.visualize import view
+view(out)
 
 
 
-pareto = np.argmin(data.T,axis=1)
-print(pareto)
-
-plt.tight_layout()
-
-
-
-plt.savefig('./phases.png',dpi=300)
-plt.show()
