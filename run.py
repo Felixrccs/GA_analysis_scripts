@@ -173,20 +173,7 @@ from sage_lib.partition.Partition import Partition
 
 
 
-#files = f'/home/friccius/data/MACE/MACE_hero_run/ga_dir/generation_7/supercell_4_4_1/config_all.xyz' 
-files = './out.xyz'
-
-partition=Partition()
-partition.read_files(files)
-
-# calculate surface free energies
-
-comp = target_diagram(reference_potentials= {"Cu": -3.727123268440009, "H2O": -14.253282664300396,  "H": -6.81835453297334/2})
-U,data = comp(partition)
-fig, ax = plt.subplots()
-for i,val in enumerate(data):
-    ax.plot(U,val*1e3,'darkgray',lw=0.5)
-
+fig,ax = plt.subplots(figsize = (6,4))
 
 partition=Partition()
 partition.read_files('./Lit.xyz')
@@ -197,8 +184,30 @@ for i,val in enumerate(data):
     ax.plot(U,val*1e3,'r',zorder=3)
 
 
-ax.set_xlabel('mu_H - mu_H_0 [eV]')
 
+
+partition=Partition()
+partition.read_files('/home/hero/final_restart_32_32_1_for_6_from_5.xyz',sampling='random',n_samples=5000)
+#partition.read_files('../concat_5.xyz')
+
+comp = target_diagram(reference_potentials= {"Cu": -3.727123268440009, "H2O": -14.253282664300396,  "H": -6.81835453297334/2})
+U,data = comp(partition)
+for i,val in enumerate(data):
+    ax.plot(U,val*1e3,'b',lw=0.5,zorder =0)
+
+
+#partition=Partition()
+#partition.read_files('../concat_5.xyz',sampling = "random", n_samples = 3000)
+#partition.read_files('../restart_8_8_1_from_1.xyz' ,sampling = "random", n_samples = 2000)
+
+#comp = target_diagram(reference_potentials= {"Cu": -3.727123268440009, "H2O": -14.253282664300396,  "H": -6.81835453297334/2})
+#U,data = comp(partition)
+#for i,val in enumerate(data):
+#    ax.plot(U,val*1e3,'b',lw=0.5, alpha = 0.1, zorder =1)
+
+
+
+ax.set_xlabel('mu_H - mu_H_0 [eV]')
 ax.set_ylim([0,400])
 ax.set_xlim([-1.0,0.5])
 ax.set_ylabel(r'$\gamma$ (eV/$\rm \AA^2$)')
@@ -213,16 +222,15 @@ secax.set_xlabel('U_RHE / U_SHE (pH=0) [V]')
 
 # SHE pH = 13 (Literature, compare to slides)
 third = ax.secondary_xaxis(1.2, functions=(lambda x: get_delta_mu_H(x,pH=13), lambda x: get_delta_U(x,pH=13)))
-third.set_xlabel('U_RHE / U_SHE (pH=13) [V] literature')
+third.set_xlabel('U_SHE (pH=13) [V] literature')
 
 
 
 pareto = np.argmin(data.T,axis=1)
-print(pareto)
 
 plt.tight_layout()
 
 
-
 plt.savefig('./phases.png',dpi=300)
+
 plt.show()
