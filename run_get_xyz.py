@@ -79,7 +79,7 @@ def get_bulk_classic(mu_H2O, mu_H):
 def target_diagram(
     reference_potentials: dict,
     H_range: tuple = (-1.0, 0.5),
-    steps: int = 2
+    steps: int = 100
 ):
     """
     Objective function for GA: minimal distance of each structure to the convex hull
@@ -120,8 +120,8 @@ def target_diagram(
         # 1) Unique labels: hard coded for application
         #unique_labels = ['H','O','Cu']
 
-        a_vec = dataset[0].AtomPositionManager.latticeVectors[0, :2]
-        b_vec = dataset[0].AtomPositionManager.latticeVectors[1, :2]
+        a_vec = dataset[2].AtomPositionManager.latticeVectors[0, :2]
+        b_vec = dataset[2].AtomPositionManager.latticeVectors[1, :2]
         A = abs(np.linalg.det(np.array([a_vec, b_vec])))
 
 
@@ -130,7 +130,6 @@ def target_diagram(
 
         # Fill composition counts and energies
         y = dataset.get_all_energies()
-        print(y)
         species, species_order = dataset.get_all_compositions(return_species=True)
         mapping = dataset.get_species_mapping(order="stored")
         idx = np.fromiter((mapping.get(lbl, -1) for lbl in unique_labels), dtype=int, count=len(unique_labels))
@@ -140,21 +139,24 @@ def target_diagram(
             X[:, valid] = species[:, idx[valid]]
 
         # 3) CHE adjustment Adjust for mu_O = mu_H2O - 2mu_H
+        print(unique_labels_dict)
+        print(X[0])
         X[:,unique_labels_dict['H']] -= 2*X[:,unique_labels_dict['O']]
-
+        print(X[0])
         # Reference chemical potentials for fixed species
         base_mu = np.array([reference_potentials.get(lbl, 0.0) for lbl in unique_labels])
         base_mu[ unique_labels_dict['O'] ] = reference_potentials.get('H2O', 0.0)
-
+        print(base_mu)
         # Formation energy reference
         fE_ref = y - X.dot(base_mu)
         nH = X[:, unique_labels_dict['H']]
-
+        print(y[0], fE_ref[0])
         # Sample H potentials
         H_values = np.linspace(H_range[0], H_range[1], steps)
 
         # Vectorized formation energies
         fE_array = fE_ref[:, None] - nH[:, None]*H_values[None, :]
+        print(fE_array[0])
         fE_array /= A
         print(A)
 
@@ -170,88 +172,40 @@ from sage_lib.partition.Partition import Partition
 
 
 
+
 fig,ax = plt.subplots(figsize = (6,4))
 
 
 
 p = Partition(
     storage='composite',
-    base_root='../data_base/end_02_02_1',
+    base_root='../data_base/end_32_32_1_inclusive_GA_11',
     local_root='./'
 )
+
+
+#p = Partition(
+#    storage='composite',
+#    base_root='../data_base/end_08_08_1',
+#    local_root='./'
+#)
+#
+
+
+
+comp = target_diagram(reference_potentials= {"Cu": -3.727123268440009, "H2O": -14.253282664300396,  "H": -6.81835453297334/2})
+U,data = comp(p)
+
+minima , index = np.unique(np.argmin(np.abs(data),axis=0),return_index=True)
+
+print(minima, index)
+s_min = [x for _, x in sorted(zip(index, minima), key=lambda pair: pair[0])]
 
 p1 = Partition()
-p1.add(p[1])
+for i in s_min:
+    print(i)
+    p1.add(p[i])
+
+
 p1.export_files('tmp.xyz')
 
-print(p.size)
-
-import sys
-sys.exit()
-
-comp = target_diagram(reference_potentials= {"Cu": -3.727123268440009, "H2O": -14.253282664300396,  "H": -6.81835453297334/2})
-U,data = comp(p)
-for i,val in enumerate(data):
-    ax.plot(U,val*1e3,'b',lw=0.1,alpha = 0.1, zorder =0)
-
-
-
-
-p = Partition(
-    storage='composite',
-    base_root='../data_base/end_4_4_1',
-    local_root='./'
-)
-
-
-
-comp = target_diagram(reference_potentials= {"Cu": -3.727123268440009, "H2O": -14.253282664300396,  "H": -6.81835453297334/2})
-U,data = comp(p)
-for i,val in enumerate(data):
-    ax.plot(U,val*1e3,'k',lw=0.1,alpha = 0.1, zorder =1)
-
-
-p = Partition(
-    storage='composite',
-    base_root='../data_base/end_8_8_1',
-    local_root='./'
-)
-
-
-
-comp = target_diagram(reference_potentials= {"Cu": -3.727123268440009, "H2O": -14.253282664300396,  "H": -6.81835453297334/2})
-U,data = comp(p)
-for i,val in enumerate(data):
-    ax.plot(U,val*1e3,'r',lw=0.1,alpha = 0.1, zorder =2)
-
-
-
-
-
-ax.set_xlabel('mu_H - mu_H_0 [eV]')
-ax.set_ylim([50,400])
-ax.set_xlim([-1.0,0.5])
-ax.set_ylabel(r'$\gamma$ (meV/$\rm \AA^2$)')
-
-# Bulk transition
-ax.vlines(get_bulk_classic(-14.253282664300396, -6.81835453297334/2),0.0,400,colors='b')
-ax.fill_between([-2.,get_bulk_classic(-14.253282664300396, -6.81835453297334/2)],[400,400],fc='b',alpha=0.3, zorder=1)
-
-# RHE/SHE pH=0
-secax = ax.secondary_xaxis('top', functions=(get_delta_mu_H, get_delta_U))
-secax.set_xlabel('U_RHE / U_SHE (pH=0) [V]')
-
-# SHE pH = 13 (Literature, compare to slides)
-third = ax.secondary_xaxis(1.2, functions=(lambda x: get_delta_mu_H(x,pH=13), lambda x: get_delta_U(x,pH=13)))
-third.set_xlabel('U_SHE (pH=13) [V] literature')
-
-
-
-pareto = np.argmin(data.T,axis=1)
-
-plt.tight_layout()
-
-
-plt.savefig('./phases.png',dpi=300)
-
-plt.show()
