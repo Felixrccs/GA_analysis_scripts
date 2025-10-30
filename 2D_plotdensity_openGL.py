@@ -87,7 +87,6 @@ def get_bulk_classic(mu_H2O, mu_H):
     return (mu_H2O-delta_O)/2 - mu_H
 
 
-
 # --------------------------- utils ---------------------------
 
 def ortho(l, r, b, t, n=-1.0, f=1.0):
@@ -536,63 +535,28 @@ class GPULinePlot:
 
     # ---------- draw ----------
     def _draw(self):
-
-        if self.show_density:
-            # --- Pass 1: Accumulate line density ---
-            glBindFramebuffer(GL_FRAMEBUFFER, self._density_fbo)
-            glViewport(0, 0, self.width, self.height)
-            glClearColor(0.0, 0.0, 0.0, 0.0)
-            glClear(GL_COLOR_BUFFER_BIT)
-            glEnable(GL_BLEND)
-            glBlendFunc(GL_ONE, GL_ONE)  # additive
-        else:
-            # Normal line drawing
-            glBindFramebuffer(GL_FRAMEBUFFER, 0)
-            glViewport(0, 0, self.width, self.height)
-            glClearColor(1.0, 1.0, 1.0, 1.0)
-            glClear(GL_COLOR_BUFFER_BIT)
-            glEnable(GL_BLEND)
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-
-        if self.N <= 0:
-            return
-
+        # Normal or density rendering
         glViewport(0, 0, self.width, self.height)
+        glClearColor(1.0, 1.0, 1.0, 1.0)
         glClear(GL_COLOR_BUFFER_BIT)
         if self.N <= 0:
             return
 
-        # For peak throughput, keep MSAA off in the heavy pass; blending stays on for alpha.
-        try: glDisable(GL_MULTISAMPLE)
-        except Exception: pass
+        # Si está activado el modo de densidad
+        if self.show_density:
+            self._draw_density_map()
+            return
+
+        # Caso normal (solo líneas)
+        try:
+            glDisable(GL_MULTISAMPLE)
+        except Exception:
+            pass
         glLineWidth(1.0)
 
-        # Zoom-aware keep_prob:
-        # Baseline limit of horizontal "lines per pixel".
-        base_keep = float(min(1.0, (self.max_lines_per_px * self.width) / max(1, self.N)))
-        # Auto-disable LOD when zoomed-in enough (or world window is small)
         l, r, b, t = self._world_window()
-        world_h = t - b
-        lod_active = self.enable_subsample and (self.zoom < self.lod_disable_zoom) and (world_h > self.lod_disable_h)
-        keep_prob = base_keep if lod_active else 1.0
-
         mvp = self._mvp()
         xr0, xr1 = self._xrange
-
-        # ============  XY distortions  =========
-        scale_x = 1.0  # stretch x by factor 2
-        scale_y = 1.0  # compress y by factor 0.5
-
-        scale_mat = np.array([
-            [scale_x, 0.0, 0.0, 0.0],
-            [0.0, scale_y, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-        ], dtype=np.float32)
-
-        mvp = scale_mat @ self._mvp()
-        # ====================================
-
 
         glUseProgram(self.prog)
         glUniformMatrix4fv(self.u_mvp, 1, GL_TRUE, mvp)
@@ -600,63 +564,14 @@ class GPULinePlot:
         glUniform4f(self.u_window, l, r, b, t)
         glUniform1i(self.u_use_color, 1 if self._has_color else 0)
         glUniform1f(self.u_alpha, float(self.global_alpha))
-        glUniform1i(self.u_enable_sub, 1 if lod_active else 0)
-        glUniform1f(self.u_keep_prob, keep_prob)
+        glUniform1i(self.u_enable_sub, 1)
+        glUniform1f(self.u_keep_prob, 1.0)
 
         glBindVertexArray(self.vao)
         glDrawArraysInstanced(GL_LINES, 0, 2, self.N)
-
-        if self.show_density:
-            # --- Pass 2: Visualize accumulated density ---
-            glBindFramebuffer(GL_FRAMEBUFFER, 0)
-            if not self._density_prog:
-                self._density_prog = link_program("""
-                    #version 330 core
-                    out vec2 uv;
-                    const vec2 verts[4] = vec2[4](
-                        vec2(-1.0, -1.0),
-                        vec2( 1.0, -1.0),
-                        vec2(-1.0,  1.0),
-                        vec2( 1.0,  1.0)
-                    );
-                    void main() {
-                        gl_Position = vec4(verts[gl_VertexID], 0.0, 1.0);
-                        uv = verts[gl_VertexID] * 0.5 + 0.5;
-                    }
-                """, """
-                    #version 330 core
-                    in vec2 uv;
-                    out vec4 FragColor;
-                    uniform sampler2D u_tex;
-                    uniform float u_gain;
-
-                    void main() {
-                        float d = texture(u_tex, uv).r * u_gain;
-                        // Logarithmic mapping for better contrast
-                        float val = log(1.0 + d) / log(50.0);
-                        vec3 col = vec3(
-                            smoothstep(0.0, 0.3, val),
-                            smoothstep(0.3, 0.6, val),
-                            smoothstep(0.6, 1.0, val)
-                        );
-                        FragColor = vec4(col, 1.0);
-                    }
-                """)
-
-            glDisable(GL_BLEND)
-            glUseProgram(self._density_prog)
-            glActiveTexture(GL_TEXTURE0)
-            glBindTexture(GL_TEXTURE_2D, self._density_tex)
-            glUniform1i(glGetUniformLocation(self._density_prog, "u_tex"), 0)
-            glUniform1f(glGetUniformLocation(self._density_prog, "u_gain"), self.density_gain)
-
-            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4)
-            glUseProgram(0)
-
-
         glBindVertexArray(0)
         glUseProgram(0)
-        
+
         self._draw_overlay()
 
     def _draw_overlay(self):
@@ -694,28 +609,28 @@ class GPULinePlot:
         # ------------------------------------------------------------------
         # 2. Blue shaded region (optional)
         # ------------------------------------------------------------------
-        # x_left, x_right = -1.0, -0.6
-        # y_bottom, y_top = -1.0, 1.0
-        # quad = np.array([
-        #     [x_left,  y_bottom],
-        #     [x_right, y_bottom],
-        #     [x_right, y_top],
-        #     [x_left,  y_bottom],
-        #     [x_right, y_top],
-        #     [x_left,  y_top],
-        # ], dtype=np.float32)
+        x_left, x_right = -1.0, -0.6
+        y_bottom, y_top = -1.0, 1.0
+        quad = np.array([
+            [x_left,  y_bottom],
+            [x_right, y_bottom],
+            [x_right, y_top],
+            [x_left,  y_bottom],
+            [x_right, y_top],
+            [x_left,  y_top],
+        ], dtype=np.float32)
 
-        # vao = glGenVertexArrays(1)
-        # vbo = glGenBuffers(1)
-        # glBindVertexArray(vao)
-        # glBindBuffer(GL_ARRAY_BUFFER, vbo)
-        # glBufferData(GL_ARRAY_BUFFER, quad.nbytes, quad, GL_DYNAMIC_DRAW)
-        # glEnableVertexAttribArray(0)
-        # glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, C.c_void_p(0))
-        # glUniform4f(glGetUniformLocation(prog, "u_color"), 0.6, 0.7, 1.0, 0.15)
-        # glDrawArrays(GL_TRIANGLES, 0, 6)
-        # glDeleteBuffers(1, [vbo])
-        # glDeleteVertexArrays(1, [vao])
+        vao = glGenVertexArrays(1)
+        vbo = glGenBuffers(1)
+        glBindVertexArray(vao)
+        glBindBuffer(GL_ARRAY_BUFFER, vbo)
+        glBufferData(GL_ARRAY_BUFFER, quad.nbytes, quad, GL_DYNAMIC_DRAW)
+        glEnableVertexAttribArray(0)
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, C.c_void_p(0))
+        glUniform4f(glGetUniformLocation(prog, "u_color"), 0.6, 0.7, 1.0, 0.15)
+        glDrawArrays(GL_TRIANGLES, 0, 6)
+        glDeleteBuffers(1, [vbo])
+        glDeleteVertexArrays(1, [vao])
 
         # ------------------------------------------------------------------
         # 3. Axes lines (X and Y)
@@ -773,6 +688,90 @@ class GPULinePlot:
 
         glUseProgram(0)
 
+    def _draw_density_map(self):
+        """Perform additive accumulation of line density and visualize it as a heatmap."""
+        # --- Pass 1: Accumulate line density into framebuffer ---
+        glBindFramebuffer(GL_FRAMEBUFFER, self._density_fbo)
+        glViewport(0, 0, self.width, self.height)
+        glClearColor(0.0, 0.0, 0.0, 0.0)
+        glClear(GL_COLOR_BUFFER_BIT)
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_ONE, GL_ONE)  # additive blending
+
+        # Draw all instanced lines
+        mvp = self._mvp()
+        xr0, xr1 = self._xrange
+        l, r, b, t = self._world_window()
+
+        glUseProgram(self.prog)
+        glUniformMatrix4fv(self.u_mvp, 1, GL_TRUE, mvp)
+        glUniform2f(self.u_xrange, xr0, xr1)
+        glUniform4f(self.u_window, l, r, b, t)
+        glUniform1i(self.u_use_color, 1 if self._has_color else 0)
+        glUniform1f(self.u_alpha, float(self.global_alpha))
+        glUniform1i(self.u_enable_sub, 0)
+        glUniform1f(self.u_keep_prob, 1.0)
+        glBindVertexArray(self.vao)
+        glDrawArraysInstanced(GL_LINES, 0, 2, self.N)
+        glBindVertexArray(0)
+        glUseProgram(0)
+
+        # --- Pass 2: Visualize the accumulated density texture ---
+        glBindFramebuffer(GL_FRAMEBUFFER, 0)
+        if not self._density_prog:
+            self._density_prog = link_program("""
+                #version 330 core
+                out vec2 uv;
+                const vec2 verts[4] = vec2[4](
+                    vec2(-1.0, -1.0),
+                    vec2( 1.0, -1.0),
+                    vec2(-1.0,  1.0),
+                    vec2( 1.0,  1.0)
+                );
+                void main() {
+                    gl_Position = vec4(verts[gl_VertexID], 0.0, 1.0);
+                    uv = verts[gl_VertexID] * 0.5 + 0.5;
+                }
+            """, """
+                #version 330 core
+                #define log10(x) (log(x) / log(10.0))
+                in vec2 uv;
+                out vec4 FragColor;
+                uniform sampler2D u_tex;
+                uniform float u_gain;
+
+                // Simple RGB gradient mapping
+                vec3 heatmap(float x) {
+                    x = clamp(x, 0.0, 1.0);
+                    return vec3(
+                        smoothstep(0.0, 0.3, x),
+                        smoothstep(0.3, 0.6, x),
+                        smoothstep(0.6, 1.0, x)
+                    );
+                }
+
+                void main() {
+                    float d = texture(u_tex, uv).r * u_gain;
+                    float val = log10(1.0 + d) / log10(50.0);
+                    FragColor = vec4(heatmap(val), 1.0);
+                }
+            """)
+
+        glDisable(GL_BLEND)
+        glUseProgram(self._density_prog)
+        glActiveTexture(GL_TEXTURE0)
+        glBindTexture(GL_TEXTURE_2D, self._density_tex)
+        glUniform1i(glGetUniformLocation(self._density_prog, "u_tex"), 0)
+        glUniform1f(glGetUniformLocation(self._density_prog, "u_gain"), self.density_gain)
+
+        # Create minimal VAO for fullscreen quad (required in Core Profile)
+        vao = glGenVertexArrays(1)
+        glBindVertexArray(vao)
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4)
+        glBindVertexArray(0)
+        glDeleteVertexArrays(1, [vao])
+
+        glUseProgram(0)
 
     # ---------- callbacks ----------
     def _on_resize(self, win, w, h):
@@ -811,7 +810,7 @@ class GPULinePlot:
         elif key in (glfw.KEY_MINUS, glfw.KEY_KP_SUBTRACT):
             self._apply_zoom_at_cursor(1/1.1, self.width*0.5, self.height*0.5); self._dirty = True
         elif key == glfw.KEY_R:
-            self.cx = self.cy = 0.0; self.zoom = 1.0; self._dirty = True
+            self.cx = self.cy = -0.0; self.zoom = 1.0; self._dirty = True
         # Live LOD controls
         elif key == glfw.KEY_LEFT_BRACKET:   # '['
             self.max_lines_per_px = max(1, int(self.max_lines_per_px*0.8)); self._dirty = True
@@ -839,6 +838,7 @@ class GPULinePlot:
             self._dirty = True
             print(f"Density gain = {self.density_gain:.2f}")
 
+
     def save_current_view(self, filename=None):
         """
         Save the current GPU framebuffer (normal or density mode)
@@ -859,8 +859,8 @@ class GPULinePlot:
             data = glReadPixels(0, 0, self.width, self.height, GL_RED, GL_FLOAT)
             img = np.frombuffer(data, dtype=np.float32).reshape(self.height, self.width)
             # Optional: apply log scaling for better visibility
-            img = np.log1p(img)
-            cmap = "viridis"
+            img = np.log10(1 + img)
+            cmap = "YlOrRd"
             print("Saving density map with logarithmic scaling...")
         else:
             if filename is None:
@@ -899,7 +899,7 @@ class GPULinePlot:
             divider = make_axes_locatable(ax)
             cax = divider.append_axes("right", size="2%", pad=0.1)
             cbar = plt.colorbar(im, cax=cax)
-            cbar.set_label("log(1 + line density)")
+            cbar.set_label("log₁₀(1 + line density)")
         else:               # standard RGB
             ax.imshow(img, extent=(l, r, b, t), origin="lower")
 
@@ -1000,7 +1000,7 @@ def objective_min_distance_to_electrochemicalhull(
 
 
 if __name__ == "__main__":
-    app = GPULinePlot(1280, 800,  "GPU Lines — upload-once, clip planes, LOD (fixed)")
+    app = GPULinePlot(2280, 1800,  "GPU Lines — upload-once, clip planes, LOD (fixed)")
     #app.set_global_alpha(0.1)
 
     def plot(path, add=True, colors=[1, 0, 0]):
@@ -1037,9 +1037,6 @@ if __name__ == "__main__":
         ab = ab[:, ::-1]
         ab[:, 0] -= ab[:, 1]
         ab /= float(np.linalg.norm(np.cross(L[:, 0], L[:, 1])))
-        ab[:, 1]-=0.08
-        ab*=2
-
 
         N = p.size
 
@@ -1053,7 +1050,7 @@ if __name__ == "__main__":
         on_hull = np.abs(min_distances1 - np.min(min_distances1)) < tol
 
         # Alpha: more opaque for hull structures
-        cols[:, 3] = np.where(on_hull, 0.9, 0.02)
+        cols[:, 3] = np.where(on_hull, 0.9, 0.004)
 
         # Optional: brighten RGB for hull members
         cols[on_hull, :3] = np.clip(np.array(colors) * 1.3, 0, 1)
@@ -1070,11 +1067,14 @@ if __name__ == "__main__":
             app.set_lines_ab(ab, x_range=(-1.0, 0.5), colors=cols)
 
     # 1st PLOT add=False
-    path = '/home/hero/data/data_base/end_08_08_1'
+    path = '/Users/dimitry/Documents/Data/EZGA/9-superhero/database/data_base/end_8_4_1'
     plot(path,add=False,colors=[1,0,0])
 
-    path = '/home/hero/data/data_base/end_32_32_1_inclusive_GA_11'
-    plot(path,add=True,colors=[1,0,0])
+    # extra PLOTs add=True
+    path = '/Users/dimitry/Documents/Data/EZGA/9-superhero/database/data_base/end_4_4_1'
+    plot(path,add=True,colors=[0,1,0])
+    path = '/Users/dimitry/Documents/Data/EZGA/9-superhero/database/data_base/end_2_2_1'
+    plot(path,add=True,colors=[0,0,1])
 
     app.run()
 
