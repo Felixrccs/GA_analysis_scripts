@@ -8,6 +8,85 @@ import ctypes as C
 import numpy as np
 import glfw
 from OpenGL.GL import *
+from scipy.constants import k,e
+
+
+def get_delta_mu_H(U, pH = 0, T=298, p_H2 =1):
+    """
+    Transforms a applied_potential into delta mu_H (H+ + e-) via CHE
+
+    Parameters
+    ----------
+    U : float / array,
+        applied_potential (V)
+    pH : float
+        pH Value
+    T : float, 298
+        Temperature in K
+    p_H2 : float, 1
+        hydrogen gas_phase pressure in K
+
+    Returns
+    -------
+    mu_H : float / array,
+        (H+ + e-) chemical potential in eV
+    """
+    return (
+        - (2.303 * k * T / e) * pH
+        - (k * T / (2 * e)) * np.log(p_H2 / 1.)
+        - U  # main dependence
+    )
+
+def get_delta_U(d_mu, pH = 0, T=298, p_H2 = 1):
+    """
+    Transforms a delta mu_H (H+ + e-) applied_potential via CHE
+
+    Parameters
+    ----------
+    m_H : float / array,
+        (H+ + e-) chemical potential in eV
+    pH : float
+        pH Value
+    T : float, 298
+        Temperature in K
+    p_H2 : float, 1
+        hydrogen gas_phase pressure in K
+
+    Returns
+    -------
+    U : float / array,
+        applied_potential (V)
+    """
+    return (
+        - (2.303 * k * T / e) * pH
+        - (k * T / (2 * e)) * np.log(p_H2 / 1.)
+        - d_mu  # main dependence
+    )
+
+
+def get_bulk_classic(mu_H2O, mu_H):
+    """
+    calculation of the bulk transition
+
+    Parameters
+    ----------
+    mu_H2O : float
+        H2O chemical potential in eV
+    m_H_0 : float
+        standard (H+ + e-) chemical potential in eV
+
+    Returns
+    -------
+    delta mu_H : float,
+        (H+ + e-) chemical potential in eV
+    """
+    ref_Cu_int = -14.913209 / 4
+    ref_Cu2O_int = (-27.27211939) / 4 # two oxygen
+
+    delta_O = 2 * (ref_Cu2O_int - ref_Cu_int)
+    return (mu_H2O-delta_O)/2 - mu_H
+
+
 
 # --------------------------- utils ---------------------------
 
@@ -615,28 +694,28 @@ class GPULinePlot:
         # ------------------------------------------------------------------
         # 2. Blue shaded region (optional)
         # ------------------------------------------------------------------
-        x_left, x_right = -1.0, -0.6
-        y_bottom, y_top = -1.0, 1.0
-        quad = np.array([
-            [x_left,  y_bottom],
-            [x_right, y_bottom],
-            [x_right, y_top],
-            [x_left,  y_bottom],
-            [x_right, y_top],
-            [x_left,  y_top],
-        ], dtype=np.float32)
+        # x_left, x_right = -1.0, -0.6
+        # y_bottom, y_top = -1.0, 1.0
+        # quad = np.array([
+        #     [x_left,  y_bottom],
+        #     [x_right, y_bottom],
+        #     [x_right, y_top],
+        #     [x_left,  y_bottom],
+        #     [x_right, y_top],
+        #     [x_left,  y_top],
+        # ], dtype=np.float32)
 
-        vao = glGenVertexArrays(1)
-        vbo = glGenBuffers(1)
-        glBindVertexArray(vao)
-        glBindBuffer(GL_ARRAY_BUFFER, vbo)
-        glBufferData(GL_ARRAY_BUFFER, quad.nbytes, quad, GL_DYNAMIC_DRAW)
-        glEnableVertexAttribArray(0)
-        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, C.c_void_p(0))
-        glUniform4f(glGetUniformLocation(prog, "u_color"), 0.6, 0.7, 1.0, 0.15)
-        glDrawArrays(GL_TRIANGLES, 0, 6)
-        glDeleteBuffers(1, [vbo])
-        glDeleteVertexArrays(1, [vao])
+        # vao = glGenVertexArrays(1)
+        # vbo = glGenBuffers(1)
+        # glBindVertexArray(vao)
+        # glBindBuffer(GL_ARRAY_BUFFER, vbo)
+        # glBufferData(GL_ARRAY_BUFFER, quad.nbytes, quad, GL_DYNAMIC_DRAW)
+        # glEnableVertexAttribArray(0)
+        # glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, C.c_void_p(0))
+        # glUniform4f(glGetUniformLocation(prog, "u_color"), 0.6, 0.7, 1.0, 0.15)
+        # glDrawArrays(GL_TRIANGLES, 0, 6)
+        # glDeleteBuffers(1, [vbo])
+        # glDeleteVertexArrays(1, [vao])
 
         # ------------------------------------------------------------------
         # 3. Axes lines (X and Y)
@@ -768,6 +847,8 @@ class GPULinePlot:
         import numpy as np
         import matplotlib.pyplot as plt
         from PIL import Image
+        import matplotlib.ticker as ticker
+        from mpl_toolkits.axes_grid1 import make_axes_locatable
 
         # --- 1. Determine what to save ---
         if self.show_density:
@@ -793,18 +874,35 @@ class GPULinePlot:
         # --- 2. Axis scaling ---
         l, r, b, t = self._world_window()
         fig, ax = plt.subplots(figsize=(8, 6), dpi=150)
+        
+        ax.set_xlabel(r"$\mu_{\rm H}$ (eV)")
+        ax.set_ylabel(r"$\gamma$ (meV/$\rm \AA^2$)")
+        ax.set_xlim([-1,0.5])
+
+        ticks_x = ticker.FuncFormatter(lambda x, pos: '{0:g}'.format(x*500))
+        ax.yaxis.set_major_formatter(ticks_x)
+        ax.set_ylim([0,0.8])
+        ax.vlines(get_bulk_classic(-14.253282664300396, -6.81835453297334/2),0.0,400,colors='white')
+        ax.fill_between([-2.,get_bulk_classic(-14.253282664300396, -6.81835453297334/2)],[400,400],fc='white',alpha=0.5, zorder=1)
+        ax.text(-0.8,0.4,'Cu$_2$O-bulk',va='center',ha='center', bbox=dict(facecolor=(1,1,1), edgecolor=(0,0,0)))
+
+        secax = ax.secondary_xaxis('top', functions=(get_delta_mu_H, get_delta_U))
+        secax.set_xlabel('U_RHE / U_SHE (pH=0) [V]')
+
+        # SHE pH = 13 (Literature, compare to slides)
+        third = ax.secondary_xaxis(1.2, functions=(lambda x: get_delta_mu_H(x,pH=13), lambda x: get_delta_U(x,pH=13)))
+        third.set_xlabel('U_SHE (pH=13) [V] literature')
+
 
         if img.ndim == 2:  # density map
-            ax.imshow(img, extent=(l, r, b, t), origin="lower", cmap=cmap)
-            cbar = plt.colorbar(ax.images[0], ax=ax)
+            im = ax.imshow(img, extent=(l, r, b, t), origin="lower", cmap=cmap)
+            divider = make_axes_locatable(ax)
+            cax = divider.append_axes("right", size="2%", pad=0.1)
+            cbar = plt.colorbar(im, cax=cax)
             cbar.set_label("log(1 + line density)")
         else:               # standard RGB
             ax.imshow(img, extent=(l, r, b, t), origin="lower")
 
-        ax.set_xlabel("μ_H (eV)")
-        ax.set_ylabel("ΔE (eV)")
-        ax.set_title("GPU LinePlot Snapshot — Axes Scaled")
-        ax.grid(True, alpha=0.3)
 
         plt.savefig(filename, dpi=200, bbox_inches="tight")
         plt.close()
@@ -939,6 +1037,9 @@ if __name__ == "__main__":
         ab = ab[:, ::-1]
         ab[:, 0] -= ab[:, 1]
         ab /= float(np.linalg.norm(np.cross(L[:, 0], L[:, 1])))
+        ab[:, 1]-=0.08
+        ab*=2
+
 
         N = p.size
 
@@ -952,7 +1053,7 @@ if __name__ == "__main__":
         on_hull = np.abs(min_distances1 - np.min(min_distances1)) < tol
 
         # Alpha: more opaque for hull structures
-        cols[:, 3] = np.where(on_hull, 0.9, 0.004)
+        cols[:, 3] = np.where(on_hull, 0.9, 0.02)
 
         # Optional: brighten RGB for hull members
         cols[on_hull, :3] = np.clip(np.array(colors) * 1.3, 0, 1)
@@ -969,14 +1070,11 @@ if __name__ == "__main__":
             app.set_lines_ab(ab, x_range=(-1.0, 0.5), colors=cols)
 
     # 1st PLOT add=False
-    path = '/Users/dimitry/Documents/Data/EZGA/9-superhero/database/data_base/end_8_4_1'
+    path = '/home/hero/data/data_base/end_08_08_1'
     plot(path,add=False,colors=[1,0,0])
 
-    # extra PLOTs add=True
-    path = '/Users/dimitry/Documents/Data/EZGA/9-superhero/database/data_base/end_4_4_1'
-    plot(path,add=True,colors=[0,1,0])
-    path = '/Users/dimitry/Documents/Data/EZGA/9-superhero/database/data_base/end_2_2_1'
-    plot(path,add=True,colors=[0,0,1])
+    path = '/home/hero/data/data_base/end_32_32_1_inclusive_GA_11'
+    plot(path,add=True,colors=[1,0,0])
 
     app.run()
 
