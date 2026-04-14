@@ -1,3 +1,5 @@
 *db*
 *.png
-*.xyz
+*.egg-info*
+*__pycache__*
+*/imgui.ini

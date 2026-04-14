@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+
+[project]
+name = "ga-analysis"
+version = "0.1.0"
+description = "Genetic algorithm analysis tools for electrochemical systems"
+requires-python = ">=3.9"
+dependencies = [
+    "numpy",
+    "scipy",
+    "sage-lib",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
