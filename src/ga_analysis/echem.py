@@ -1,6 +1,7 @@
 import numpy as np
 from scipy.constants import k,e
 from sage_lib.partition.Partition import Partition
+from copy import deepcopy
 
 def get_delta_mu_H(U, pH = 0, T=298, p_H2 =1):
     """
@@ -139,7 +140,6 @@ def target_diagram(
         if np.any(valid):
             X[:, valid] = species[:, idx[valid]]
 
-        X = X
 
         # 3) CHE adjustment Adjust for mu_O = mu_H2O - 2mu_H
         X[:,unique_labels_dict['H']] -= 2*X[:,unique_labels_dict['O']]
